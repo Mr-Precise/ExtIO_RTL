@@ -1,26 +1,23 @@
 ## ExtIO_RTL
 
-ExtIO wrapper for librtlsdr for use with [**HDSDR**](https://hdsdr.de/) and other [**Winrad**](https://www.i2phd.org/winrad/) compatible programs
+ExtIO wrapper for librtlsdr for use with [**HDSDR**](https://hdsdr.de/) and other [**Winrad**](https://www.i2phd.org/winrad/) compatible programs.  
 
+### Fork for modified library by [Mr-Precise/rtl-sdr](https://github.com/Mr-Precise/rtl-sdr)
+---
 * Original code from [**jorgem-seq/ExtIO_RTL**](https://github.com/jorgem-seq/ExtIO_RTL), which was derived from [**josemariaaraujo/ExtIO_RTL**](https://github.com/josemariaaraujo/ExtIO_RTL)
-* removed makefiles and added cmake support to compile with Visual Studio 2019
-* added all required libraries as submodules
-* added github action for automatic build
-* merged 'Add Bias Tee option, add branch auto switch' from Jorge's testing branch
+* removed makefiles and added cmake support to compile with Visual Studio or MinGW
+* merged 'Add Bias Tee option'
+---
+### For manual compilation from Visual Studio 2010/2019 or MinGW.  
+[Visual Studio](https://visualstudio.microsoft.com/) or MinGW/[msys](https://www.msys2.org/)/[LLVM Clang MinGW](https://github.com/mstorsjo/llvm-mingw) etc...  
+libusb [libusb/releases](https://github.com/libusb/libusb/releases)  
+[pthread-win32 library](https://github.com/GerHobbelt/pthread-win32)  
+Latest [CMake](https://cmake.org/download/) or [Old CMake](https://github.com/Kitware/CMake/releases/tag/v3.13.4) for 2000/XP  
+librtlsdr [rtl-sdr](https://github.com/Mr-Precise/rtl-sdr)  
+Recommented for use: [Precompiled static libs (build kit)](https://github.com/Mr-Precise/SDR-binary-builds-stuff/releases/tag/windows)
 
-Clone with submodules to automatically retrieve libusb, pthread-win32 and librtlsdr from git bash:
-
-```
-git clone -b cmake_github_action --recursive https://github.com/hayguen/ExtIO_RTL.git
-```
-
-Manual compilation from Visual Studio 2019 Command Prompt:
-```
-cmake -G "Visual Studio 16 2019" -A Win32 -S ExtIO_RTL -B build_ExtIO_RTL
-cmake --build build_ExtIO_RTL --config Release --target ExtIO_RTL
-```
-
-A pre-built binary should be available in github Actions.
+---
+### Download latest pre-built binary available in [Release](https://github.com/Mr-Precise/ExtIO_RTL/releases/latest) section.
 
 ### LICENSE
 
