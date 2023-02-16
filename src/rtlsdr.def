@@ -25,6 +25,13 @@ rtlsdr_reset_buffer
 rtlsdr_set_agc_mode
 rtlsdr_set_bias_tee
 rtlsdr_set_bias_tee_gpio
+rtlsdr_set_gpio_input
+rtlsdr_set_gpio_output
+rtlsdr_get_gpio_bit
+rtlsdr_set_gpio_bit
+rtlsdr_i2c_write_reg
+rtlsdr_i2c_read_reg
+rtlsdr_set_i2c_repeater
 rtlsdr_set_center_freq
 rtlsdr_set_direct_sampling
 rtlsdr_set_freq_correction
@@ -35,6 +42,8 @@ rtlsdr_set_tuner_bandwidth
 rtlsdr_set_tuner_gain
 rtlsdr_set_tuner_gain_mode
 rtlsdr_set_tuner_if_gain
+rtlsdr_get_tuner_clock
 rtlsdr_set_xtal_freq
 rtlsdr_wait_async
 rtlsdr_write_eeprom
+rtlsdr_ir_query

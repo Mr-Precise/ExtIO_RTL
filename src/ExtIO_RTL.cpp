@@ -52,6 +52,7 @@ static const TCHAR *RtlSdrTunerArr[] = {
 	TEXT("FC0012 Gain"),
 	TEXT("FC0013 Gain"),
 	TEXT("FC2580 Gain"),
+	TEXT("MAX2112 Gain"),
 	TEXT("R820T Gain"),
 	TEXT("R828D Gain")
 };
