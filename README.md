@@ -14,7 +14,7 @@ libusb [libusb/releases](https://github.com/libusb/libusb/releases)
 [pthread-win32 library](https://github.com/GerHobbelt/pthread-win32)  
 Latest [CMake](https://cmake.org/download/) or [Old CMake](https://github.com/Kitware/CMake/releases/tag/v3.13.4) for 2000/XP  
 librtlsdr [rtl-sdr](https://github.com/Mr-Precise/rtl-sdr)  
-Recommented for use: [Precompiled static libs (build kit)](https://github.com/Mr-Precise/SDR-binary-builds-stuff/releases/tag/windows)
+Recommended for use: [Precompiled static libs (build kit)](https://github.com/Mr-Precise/SDR-binary-builds-stuff/releases/tag/windows)
 
 ---
 ### Download latest pre-built binary available in [Release](https://github.com/Mr-Precise/ExtIO_RTL/releases/latest) section.
