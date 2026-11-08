@@ -4,6 +4,7 @@
 #define EXTIO_RTL_H
 
 #include <stdint.h>
+#include <windows.h>
 
 #define ARRAY_SIZE(arr)		(sizeof(arr) / sizeof((arr)[0]))
 #define ARRAY_SSIZE(arr)	((SSIZE_T)ARRAY_SIZE(arr))
@@ -35,7 +36,7 @@
 #define EXTIO_CHANGED_ATT	125
 #define EXTIO_CHANGED_RF_IF	136
 
-#define EXTIO_SET_STATUS(EXTIO_CB, EXTIO_CMD)	EXTIO_CB(-1, EXTIO_CMD, 0, NULL)
+#define EXTIO_SET_STATUS(EXTIO_CB, EXTIO_CMD)	do { if (EXTIO_CB) (EXTIO_CB)(-1, (EXTIO_CMD), 0, NULL); } while (0)
 
 extern HMODULE hInst;
 
