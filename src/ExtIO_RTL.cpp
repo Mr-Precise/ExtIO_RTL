@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2013 José Araújo <josemariaaraujo@gmail.com>
+// SPDX-FileCopyrightText: 2013 JosÃ© AraÃºjo <josemariaaraujo@gmail.com>
 // SPDX-FileCopyrightText: 2020 Jorge Maidana <jorgem.seq@gmail.com>
 //
 // SPDX-License-Identifier: GPL-2.0-or-later
@@ -95,19 +95,20 @@ static rtlsdr_dev_t *RtlSdrDev;
 static uint32_t RtlSdrDevCount;
 
 // Tuner
-static int *RtlSdrTunerGainsArr;
-static int RtlSdrTunerGainsCount;
+static int RtlSdrTunerGainsArr[RTLSDR_MAXTUNERGAINS];
+static int RtlSdrTunerGainsCount = 0;
 static int RtlSdrTunerGain;
 static int RtlSdrPllLocked; // 0 = Locked
 
 // Buffer
 static const uint32_t RtlSdrBufSizeArr[] = { 1, 2, 4, 8, 16, 32, 64, 128, 256 }; // In KiB
 static const uint32_t RtlSdrBufSizeMax = 256;
+static const uint32_t RtlSdrMaxBufShortSamples = RtlSdrBufSizeMax * 1024;
 static uint32_t RtlSdrBufSize;
-static short *RtlSdrBufShort;
+static short *RtlSdrBufShort = NULL;
 
 static HANDLE RtlSdrHandle = INVALID_HANDLE_VALUE;
-static void RtlSdrThreadProc(void * /* param */);
+static unsigned __stdcall RtlSdrThreadProc(void * /* param */);
 static int RtlSdrThreadStart(void);
 static int RtlSdrThreadStop(void);
 static void RtlSdrCallback(unsigned char *buf, uint32_t len, void * /* ctx */); // RTL-SDR Callback
@@ -136,10 +137,12 @@ extern "C" bool __stdcall InitHW(char *name, char *model, int &hwtype)
 	if (!ExtIODataU8)
 	{
 		hwtype = EXTIO_USBDATA_16;
-		RtlSdrBufShort = new(std::nothrow) short[RtlSdrBufSizeMax];
 		if (!RtlSdrBufShort) {
-			EXTIO_RTL_ERROR("Couldn't allocate buffer!");
-			return FALSE;
+			RtlSdrBufShort = new(std::nothrow) short[RtlSdrMaxBufShortSamples];
+			if (!RtlSdrBufShort) {
+				EXTIO_RTL_ERROR("Couldn't allocate buffer!");
+				return FALSE;
+			}
 		}
 	}
 	else
@@ -168,12 +171,22 @@ extern "C" bool __stdcall OpenHW(void)
 	if (ret < 0)
 		goto fail;
 
+	INITCOMMONCONTROLSEX icex;
+	icex.dwSize = sizeof(INITCOMMONCONTROLSEX);
+	icex.dwICC = ICC_UPDOWN_CLASS | ICC_BAR_CLASSES;
+	InitCommonControlsEx(&icex);
+
 	h_dialog = CreateDialog(hInst, MAKEINTRESOURCE(DLG_MAIN),
 				NULL, (DLGPROC)MainDlgProc);
-	ShowWindow(h_dialog, SW_HIDE);
+	if (h_dialog)
+		ShowWindow(h_dialog, SW_HIDE);
 	return TRUE;
 
 fail:
+	if (RtlSdrDev) {
+		rtlsdr_close(RtlSdrDev);
+		RtlSdrDev = NULL;
+	}
 	EXTIO_RTL_ERROR("Couldn't open device!");
 	return FALSE;
 }
@@ -303,7 +316,12 @@ extern "C" int __stdcall ExtIoGetSrates(int idx, double *samplerate)
 
 extern "C" int __stdcall ExtIoGetActualSrateIdx(void)
 {
-	return ComboBox_GetCurSel(GetDlgItem(h_dialog, IDC_RTL_SAMPLE_RATE));
+	if (h_dialog) {
+		int cur = ComboBox_GetCurSel(GetDlgItem(h_dialog, IDC_RTL_SAMPLE_RATE));
+		if (cur != CB_ERR)
+			return cur;
+	}
+	return ExtIOSampleRate;
 }
 
 extern "C" int __stdcall ExtIoSetSrate(int idx)
@@ -311,8 +329,11 @@ extern "C" int __stdcall ExtIoSetSrate(int idx)
 	if (idx < 0 || idx >= ARRAY_SSIZE(RtlSdrSampleRateArr))
 		return -1;
 
-	rtlsdr_set_sample_rate(RtlSdrDev, RtlSdrSampleRateArr[idx].value);
-	ComboBox_SetCurSel(GetDlgItem(h_dialog, IDC_RTL_SAMPLE_RATE), idx);
+	ExtIOSampleRate = idx;
+	if (RtlSdrDev)
+		rtlsdr_set_sample_rate(RtlSdrDev, RtlSdrSampleRateArr[idx].value);
+	if (h_dialog)
+		ComboBox_SetCurSel(GetDlgItem(h_dialog, IDC_RTL_SAMPLE_RATE), idx);
 	EXTIO_SET_STATUS(ExtIOCallback, EXTIO_CHANGED_SR);
 	return 0;
 }
@@ -343,17 +364,22 @@ extern "C" int __stdcall SetAttenuator(int idx)
 		return -1;
 
 	pos = RtlSdrTunerGainsArr[idx];
-	SendMessage(GetDlgItem(h_dialog, IDC_TUNER_GAIN_CTL), TBM_SETPOS,
-		   (WPARAM)TRUE, (LPARAM)-pos);
-	if (Button_GetCheck(GetDlgItem(h_dialog, IDC_TUNER_AGC)) == BST_UNCHECKED) {
-		TCHAR tunergain[256];
+	if (h_dialog) {
+		SendMessage(GetDlgItem(h_dialog, IDC_TUNER_GAIN_CTL), TBM_SETPOS,
+			   (WPARAM)TRUE, (LPARAM)-pos);
+		if (Button_GetCheck(GetDlgItem(h_dialog, IDC_TUNER_AGC)) == BST_UNCHECKED) {
+			TCHAR tunergain[256];
 
-		_stprintf_s(tunergain, 256, TEXT("%2.1f dB"), (float)(pos / 10.0));
-		Static_SetText(GetDlgItem(h_dialog, IDC_TUNER_GAIN), tunergain);
-		if (pos != RtlSdrTunerGain) {
-			rtlsdr_set_tuner_gain(RtlSdrDev, pos);
-			ExtIOAutoBranch.tunergain = pos;
+			_stprintf_s(tunergain, 256, TEXT("%2.1f dB"), (float)(pos / 10.0));
+			Static_SetText(GetDlgItem(h_dialog, IDC_TUNER_GAIN), tunergain);
+			if (pos != RtlSdrTunerGain && RtlSdrDev) {
+				rtlsdr_set_tuner_gain(RtlSdrDev, pos);
+				ExtIOAutoBranch.tunergain = pos;
+			}
 		}
+	} else if (pos != RtlSdrTunerGain && RtlSdrDev) {
+		rtlsdr_set_tuner_gain(RtlSdrDev, pos);
+		ExtIOAutoBranch.tunergain = pos;
 	}
 	RtlSdrTunerGain = pos;
 	return 0;
@@ -361,38 +387,48 @@ extern "C" int __stdcall SetAttenuator(int idx)
 
 extern "C" int __stdcall ExtIoGetSetting(int idx, char *description, char *value)
 {
+	if (!description || !value)
+		return -1;
+
 	switch (idx) {
 	case 0:
 		_snprintf(description, 1024, "%s", "SampleRate");
 		_snprintf(value, 1024, "%d",
-			  ComboBox_GetCurSel(GetDlgItem(h_dialog, IDC_RTL_SAMPLE_RATE)));
+			  h_dialog ? ComboBox_GetCurSel(GetDlgItem(h_dialog, IDC_RTL_SAMPLE_RATE)) : ExtIOSampleRate);
 		return 0;
 	case 1:
 		_snprintf(description, 1024, "%s", "TunerAGC");
 		_snprintf(value, 1024, "%d",
-			  Button_GetCheck(GetDlgItem(h_dialog, IDC_TUNER_AGC)) ==
-			  BST_CHECKED ? 1 : 0);
+			  h_dialog ? (Button_GetCheck(GetDlgItem(h_dialog, IDC_TUNER_AGC)) ==
+				      BST_CHECKED ? 1 : 0) : ExtIOTunerAGC);
 		return 0;
 	case 2:
 		_snprintf(description, 1024, "%s", "RTLAGC");
 		_snprintf(value, 1024, "%d",
-			  Button_GetCheck(GetDlgItem(h_dialog, IDC_RTL_AGC)) ==
-			  BST_CHECKED ? 1 : 0);
+			  h_dialog ? (Button_GetCheck(GetDlgItem(h_dialog, IDC_RTL_AGC)) ==
+				      BST_CHECKED ? 1 : 0) : ExtIORTLAGC);
 		return 0;
 	case 3: {
 		int oldppm;
-		TCHAR ppm[256];
-
-		Edit_GetText(GetDlgItem(h_dialog, IDC_RTL_PPM), ppm, 256);
-		oldppm = ppm_validate(_ttoi(ppm));
+		if (h_dialog) {
+			TCHAR ppm[256];
+			Edit_GetText(GetDlgItem(h_dialog, IDC_RTL_PPM), ppm, 256);
+			oldppm = ppm_validate(_ttoi(ppm));
+		} else {
+			oldppm = ExtIOFreqCorrection;
+		}
 		_snprintf(description, 1024, "%s", "FreqCorrection");
 		_snprintf(value, 1024, "%d", oldppm);
 		return 0;
 	}
 	case 4: {
-		int pos = (int)-SendMessage(GetDlgItem(h_dialog, IDC_TUNER_GAIN_CTL),
-					    TBM_GETPOS, (WPARAM)0, (LPARAM)0);
-
+		int pos;
+		if (h_dialog) {
+			pos = (int)-SendMessage(GetDlgItem(h_dialog, IDC_TUNER_GAIN_CTL),
+						TBM_GETPOS, (WPARAM)0, (LPARAM)0);
+		} else {
+			pos = ExtIOTunerGain;
+		}
 		_snprintf(description, 1024, "%s", "TunerGain");
 		_snprintf(value, 1024, "%d", pos);
 		return 0;
@@ -400,23 +436,23 @@ extern "C" int __stdcall ExtIoGetSetting(int idx, char *description, char *value
 	case 5:
 		_snprintf(description, 1024, "%s", "BufferSize");
 		_snprintf(value, 1024, "%d",
-			  ComboBox_GetCurSel(GetDlgItem(h_dialog, IDC_RTL_BUFFER)));
+			  h_dialog ? ComboBox_GetCurSel(GetDlgItem(h_dialog, IDC_RTL_BUFFER)) : ExtIOBufferSize);
 		return 0;
 	case 6:
 		_snprintf(description, 1024, "%s", "OffsetTuning");
 		_snprintf(value, 1024, "%d",
-			  Button_GetCheck(GetDlgItem(h_dialog, IDC_TUNER_OFF_TUNING)) ==
-			  BST_CHECKED ? 1 : 0);
+			  h_dialog ? (Button_GetCheck(GetDlgItem(h_dialog, IDC_TUNER_OFF_TUNING)) ==
+				      BST_CHECKED ? 1 : 0) : ExtIOOffsetTuning);
 		return 0;
 	case 7:
 		_snprintf(description, 1024, "%s", "DirectSampling");
 		_snprintf(value, 1024, "%d",
-			  ComboBox_GetCurSel(GetDlgItem(h_dialog, IDC_RTL_DIR_SAMPLING)));
+			  h_dialog ? ComboBox_GetCurSel(GetDlgItem(h_dialog, IDC_RTL_DIR_SAMPLING)) : ExtIODirSampling);
 		return 0;
 	case 8:
 		_snprintf(description, 1024, "%s", "Device");
 		_snprintf(value, 1024, "%d",
-			  ComboBox_GetCurSel(GetDlgItem(h_dialog, IDC_RTL_DEVICE)));
+			  h_dialog ? ComboBox_GetCurSel(GetDlgItem(h_dialog, IDC_RTL_DEVICE)) : (int)ExtIODevIdx);
 		return 0;
 	}
 	return -1;
@@ -464,7 +500,12 @@ extern "C" void __stdcall ExtIoSetSetting(int idx, const char *value)
 		break;
 	case 8:
 		ExtIOVal = atoi(value);
-		ExtIODevIdx = ExtIOVal;
+		if (ExtIOVal >= 0 && ExtIOVal < (int)EXTIO_RTL_MAXN)
+			ExtIODevIdx = (uint32_t)ExtIOVal;
+		else
+			ExtIODevIdx = 0;
+		if (h_dialog)
+			ComboBox_SetCurSel(GetDlgItem(h_dialog, IDC_RTL_DEVICE), ExtIODevIdx);
 		break;
 	}
 }
@@ -478,10 +519,20 @@ extern "C" void __stdcall StopHW(void)
 
 extern "C" void __stdcall CloseHW(void)
 {
-	rtlsdr_close(RtlSdrDev);
-	RtlSdrDev = NULL;
-	if (h_dialog)
+	RtlSdrThreadStop();
+	if (RtlSdrDev) {
+		rtlsdr_close(RtlSdrDev);
+		RtlSdrDev = NULL;
+	}
+	if (h_dialog) {
 		DestroyWindow(h_dialog);
+		h_dialog = NULL;
+	}
+	if (RtlSdrBufShort) {
+		delete[] RtlSdrBufShort;
+		RtlSdrBufShort = NULL;
+	}
+	ExtIOInitialized = 0;
 }
 
 extern "C" void __stdcall ShowGUI(void)
@@ -510,35 +561,39 @@ extern "C" void __stdcall SetCallback(void (*ParentCallback)(int, int, float, vo
 
 static void RtlSdrCallback(unsigned char *buf, uint32_t len, void * /* ctx */)
 {
-	if (!buf || len != RtlSdrBufSize)
+	if (!buf || len == 0 || !ExtIOCallback)
 		return;
+
+	int num_complex_samples = (int)(len / 2);
 
 	if (!ExtIODataU8 && RtlSdrBufShort) {
 		short *short_buf = RtlSdrBufShort;
 		unsigned char *char_buf = buf;
 
 		for (uint32_t i = 0; i < len; i++)
-			*short_buf++ = ((short)(*char_buf++)) - 128;
+			*short_buf++ = (short)(((int)(*char_buf++) - 128) << 8);
 
-		ExtIOCallback(RtlSdrBufSize, 0, 0, RtlSdrBufShort);
-	} else if (ExtIODataU8 && buf && len == RtlSdrBufSize) {
-		ExtIOCallback(RtlSdrBufSize, 0, 0, buf);
+		ExtIOCallback(num_complex_samples, 0, 0, RtlSdrBufShort);
+	} else if (ExtIODataU8) {
+		ExtIOCallback(num_complex_samples, 0, 0, buf);
 	}
 }
 
 static int RtlSdrThreadStart(void)
 {
 	// Exit if already running
-	if (RtlSdrHandle != INVALID_HANDLE_VALUE)
+	if (RtlSdrHandle != INVALID_HANDLE_VALUE && RtlSdrHandle != NULL)
 		return -1;
 
 	// Reset endpoint
 	if (rtlsdr_reset_buffer(RtlSdrDev) < 0)
 		return -1;
 
-	RtlSdrHandle = (HANDLE)_beginthread(RtlSdrThreadProc, 0, NULL);
-	if (RtlSdrHandle == INVALID_HANDLE_VALUE)
+	RtlSdrHandle = (HANDLE)_beginthreadex(NULL, 0, RtlSdrThreadProc, NULL, 0, NULL);
+	if (RtlSdrHandle == NULL || RtlSdrHandle == INVALID_HANDLE_VALUE) {
+		RtlSdrHandle = INVALID_HANDLE_VALUE;
 		return -1;
+	}
 
 	SetThreadPriority(RtlSdrHandle, THREAD_PRIORITY_TIME_CRITICAL);
 	return 0;
@@ -546,8 +601,8 @@ static int RtlSdrThreadStart(void)
 
 static int RtlSdrThreadStop(void)
 {
-	if (RtlSdrHandle == INVALID_HANDLE_VALUE)
-		return -1;
+	if (RtlSdrHandle == INVALID_HANDLE_VALUE || RtlSdrHandle == NULL)
+		return 0;
 	rtlsdr_cancel_async(RtlSdrDev);
 	WaitForSingleObject(RtlSdrHandle, INFINITE);
 	CloseHandle(RtlSdrHandle);
@@ -555,13 +610,13 @@ static int RtlSdrThreadStop(void)
 	return 0;
 }
 
-static void RtlSdrThreadProc(void * /* param */)
+static unsigned __stdcall RtlSdrThreadProc(void * /* param */)
 {
 	// Blocks until rtlsdr_cancel_async() is called
 	// Use default number of buffers
 	rtlsdr_read_async(RtlSdrDev, (rtlsdr_read_async_cb_t)&RtlSdrCallback,
 			  NULL, 0, RtlSdrBufSize);
-	_endthread();
+	return 0;
 }
 
 static void ExtIOTunerGainsConf(HWND hwndDlg, HWND hGain)
@@ -598,11 +653,15 @@ static void ExtIOTunerGainsConf(HWND hwndDlg, HWND hGain)
 static INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
 	static HWND hGain;
-	static HBRUSH BRUSH_RED = CreateSolidBrush(RGB(255, 0, 0));
-	static HBRUSH BRUSH_GREEN = CreateSolidBrush(RGB(0, 255, 0));
+	static HBRUSH BRUSH_RED = NULL;
+	static HBRUSH BRUSH_GREEN = NULL;
 
 	switch (uMsg) {
 	case WM_INITDIALOG: {
+		if (!BRUSH_RED)
+			BRUSH_RED = CreateSolidBrush(RGB(255, 0, 0));
+		if (!BRUSH_GREEN)
+			BRUSH_GREEN = CreateSolidBrush(RGB(0, 255, 0));
 		TCHAR ppm[256];
 
 		for (int i = 0; i < ARRAY_SSIZE(RtlSdrDirSamplingArr); i++)
@@ -647,14 +706,28 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPAR
 		Edit_SetText(GetDlgItem(hwndDlg, IDC_RTL_PPM), ppm);
 		rtlsdr_set_freq_correction(RtlSdrDev, ExtIOFreqCorrection);
 
+		if (!RtlSdrDevCount)
+			RtlSdrDevCount = rtlsdr_get_device_count();
+		if (RtlSdrDevCount > EXTIO_RTL_MAXN)
+			RtlSdrDevCount = EXTIO_RTL_MAXN;
+		if (RtlSdrDevCount == 0 && RtlSdrDev != NULL)
+			RtlSdrDevCount = 1;
+
+		if (ExtIODevIdx >= RtlSdrDevCount)
+			ExtIODevIdx = 0;
+
+		HWND hDevCombo = GetDlgItem(hwndDlg, IDC_RTL_DEVICE);
+		ComboBox_ResetContent(hDevCombo);
 		for (uint32_t i = 0; i < RtlSdrDevCount; i++) {
 			TCHAR devid[256];
+			const char *dname = rtlsdr_get_device_name(i);
+			if (!dname || !*dname)
+				dname = "RTL2832U Generic";
 
-			_stprintf_s(devid, 256, TEXT("%d: %S"), i,
-				    rtlsdr_get_device_name(i));
-			ComboBox_AddString(GetDlgItem(hwndDlg, IDC_RTL_DEVICE), devid);
+			_stprintf_s(devid, 256, TEXT("%u: %hs"), i, dname);
+			ComboBox_AddString(hDevCombo, devid);
 		}
-		ComboBox_SetCurSel(GetDlgItem(hwndDlg, IDC_RTL_DEVICE), ExtIODevIdx);
+		ComboBox_SetCurSel(hDevCombo, ExtIODevIdx);
 
 		for (int i = 0; i < ARRAY_SSIZE(RtlSdrSampleRateArr); i++)
 			ComboBox_AddString(GetDlgItem(hwndDlg, IDC_RTL_SAMPLE_RATE),
@@ -671,9 +744,6 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPAR
 		RtlSdrBufSize = RtlSdrBufSizeArr[ExtIOBufferSize] * 1024;
 
 		hGain = GetDlgItem(hwndDlg, IDC_TUNER_GAIN_CTL);
-		RtlSdrTunerGainsArr = new int[RTLSDR_MAXTUNERGAINS];
-		for (int i = 0; i < RTLSDR_MAXTUNERGAINS; i++)
-			RtlSdrTunerGainsArr[i] = 0;
 		ExtIOTunerGainsConf(hwndDlg, hGain);
 
 		if (ExtIOTunerAGC) {
@@ -766,8 +836,12 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPAR
 			return TRUE;
 		case IDC_RTL_BUFFER:
 			if (GET_WM_COMMAND_CMD(wParam, lParam) == CBN_SELCHANGE) {
-				RtlSdrBufSize = RtlSdrBufSizeArr[ComboBox_GetCurSel
-						(GET_WM_COMMAND_HWND(wParam, lParam))] * 1024;
+				if (RtlSdrHandle != INVALID_HANDLE_VALUE && RtlSdrHandle != NULL) {
+					ComboBox_SetCurSel(GET_WM_COMMAND_HWND(wParam, lParam), ExtIOBufferSize);
+					return TRUE;
+				}
+				ExtIOBufferSize = ComboBox_GetCurSel(GET_WM_COMMAND_HWND(wParam, lParam));
+				RtlSdrBufSize = RtlSdrBufSizeArr[ExtIOBufferSize] * 1024;
 				EXTIO_SET_STATUS(ExtIOCallback, EXTIO_CHANGED_SR);
 			}
 			return TRUE;
@@ -813,6 +887,12 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPAR
 			return TRUE;
 		case IDC_RTL_DEVICE:
 			if (GET_WM_COMMAND_CMD(wParam, lParam) == CBN_SELCHANGE) {
+				if (RtlSdrHandle != INVALID_HANDLE_VALUE && RtlSdrHandle != NULL) {
+					ComboBox_SetCurSel(GET_WM_COMMAND_HWND(wParam, lParam), ExtIODevIdx);
+					return TRUE;
+				}
+				ExtIODevIdx = (uint32_t)ComboBox_GetCurSel(GET_WM_COMMAND_HWND(wParam, lParam));
+
 				int currppm;
 				int dirsampling;
 				uint32_t currsrate;
@@ -828,8 +908,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPAR
 
 				rtlsdr_close(RtlSdrDev);
 				RtlSdrDev = NULL;
-				if (rtlsdr_open(&RtlSdrDev, (uint32_t)ComboBox_GetCurSel
-						(GET_WM_COMMAND_HWND(wParam, lParam))) < 0) {
+				if (rtlsdr_open(&RtlSdrDev, ExtIODevIdx) < 0) {
 					EXTIO_RTL_ERROR("Couldn't open device!");
 					return TRUE;
 				}
@@ -945,8 +1024,14 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwndDlg, UINT uMsg, WPARAM wParam, LPAR
 		ShowWindow(h_dialog, SW_HIDE);
 		return TRUE;
 	case WM_DESTROY:
-		delete[] RtlSdrTunerGainsArr;
-		RtlSdrTunerGainsArr = NULL;
+		if (BRUSH_RED) {
+			DeleteObject(BRUSH_RED);
+			BRUSH_RED = NULL;
+		}
+		if (BRUSH_GREEN) {
+			DeleteObject(BRUSH_GREEN);
+			BRUSH_GREEN = NULL;
+		}
 		h_dialog = NULL;
 		return TRUE;
 	case WM_CTLCOLORSTATIC:
