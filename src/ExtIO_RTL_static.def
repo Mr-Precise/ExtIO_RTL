@@ -50,6 +50,7 @@ rtlsdr_read_sync
 rtlsdr_reset_buffer
 rtlsdr_set_agc_mode
 rtlsdr_set_bias_tee
+rtlsdr_set_bias_tee_gpio
 rtlsdr_set_gpio_input
 rtlsdr_set_gpio_output
 rtlsdr_get_gpio_bit
