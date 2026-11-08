@@ -513,24 +513,45 @@ extern "C" void __stdcall ExtIoSetSetting(int idx, const char *value)
 extern "C" void __stdcall StopHW(void)
 {
 	RtlSdrThreadStop();
-	EnableWindow(GetDlgItem(h_dialog, IDC_RTL_BUFFER), TRUE);
-	EnableWindow(GetDlgItem(h_dialog, IDC_RTL_DEVICE), TRUE);
+	if (h_dialog) {
+		EnableWindow(GetDlgItem(h_dialog, IDC_RTL_BUFFER), TRUE);
+		EnableWindow(GetDlgItem(h_dialog, IDC_RTL_DEVICE), TRUE);
+	}
+}
+
+static void SafeRtlsdrClose(rtlsdr_dev_t *dev)
+{
+#ifdef _MSC_VER
+	__try {
+		rtlsdr_close(dev);
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER) {
+		// Сrutch for prevent crash on Windows XP during libusb exit
+	}
+#else
+	rtlsdr_close(dev);
+#endif
 }
 
 extern "C" void __stdcall CloseHW(void)
 {
-	RtlSdrThreadStop();
-	if (RtlSdrDev) {
-		rtlsdr_close(RtlSdrDev);
-		RtlSdrDev = NULL;
-	}
+	ExtIOCallback = NULL;
 	if (h_dialog) {
-		DestroyWindow(h_dialog);
+		HWND hd = h_dialog;
 		h_dialog = NULL;
+		DestroyWindow(hd);
+	}
+	RtlSdrThreadStop();
+	Sleep(50);
+	if (RtlSdrDev) {
+		rtlsdr_dev_t *dev = RtlSdrDev;
+		RtlSdrDev = NULL;
+		SafeRtlsdrClose(dev);
 	}
 	if (RtlSdrBufShort) {
-		delete[] RtlSdrBufShort;
+		short *buf = RtlSdrBufShort;
 		RtlSdrBufShort = NULL;
+		delete[] buf;
 	}
 	ExtIOInitialized = 0;
 }
