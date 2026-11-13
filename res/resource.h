@@ -22,6 +22,8 @@
 #define IDC_RTL_AGC		1012
 #define IDC_TUNER_OFF_TUNING	1013
 #define IDC_RTL_BIAS_TEE	1014
+#define IDC_TUNER_BANDWIDTH	1015
+#define IDC_TUNER_DITHER	1016
 
 // Next default values for new objects
 //
